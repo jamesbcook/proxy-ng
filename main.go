@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"log"
 	"math/rand"
 	"net"
@@ -15,14 +16,22 @@ import (
 	"github.com/elazarl/goproxy"
 )
 
+var (
+	appVersion string
+	gitCommit  string
+)
+
+//UserAgent contains a slice of useragents to be used
 type UserAgent struct {
 	Names []string `json:"UserAgents"`
 }
 
+//SocksProxy contains a slice of proxies to be used
 type SocksProxy struct {
 	Names []string `json:"Proxies"`
 }
 
+//UpstreamDialer contains a slice of socks dialers to be used
 type UpstreamDialer struct {
 	forwardDialers []socks.Dialer
 }
@@ -45,7 +54,12 @@ func flagSetup() *flags {
 	socksListen := flag.String("socks", "localhost:9292", "Local socks listener to accept connections")
 	httpListen := flag.String("http", "localhost:9293", "HTTP listener to accept connections, this changes the useragent on each request")
 	verbose := flag.Bool("verbose", false, "Verbose output from proxy")
+	version := flag.Bool("version", false, "Current Version")
 	flag.Parse()
+	if *version {
+		fmt.Printf("proxy-ng v%s %s\n", appVersion, gitCommit)
+		os.Exit(0)
+	}
 	return &flags{userAgentFile: *uaFile, socks5File: *socksFile,
 		socksListener: *socksListen, httpListener: *httpListen,
 		verbose: *verbose}
@@ -120,6 +134,7 @@ func (ua UserAgent) randomName() string {
 	return ua.Names[randomUA]
 }
 
+//NewUpstreamDialer to be added to the array of dialers
 func NewUpstreamDialer(forwardDialers []socks.Dialer) *UpstreamDialer {
 	return &UpstreamDialer{
 		forwardDialers: forwardDialers,
@@ -135,6 +150,7 @@ func (u *UpstreamDialer) getRandomDialer() socks.Dialer {
 	return u.forwardDialers[randomDialer]
 }
 
+//Dial is a custom dialer that picks a random dialer before it makes it's connection
 func (u *UpstreamDialer) Dial(network, address string) (net.Conn, error) {
 	router := u.getRandomDialer()
 	conn, err := router.Dial(network, address)
@@ -144,6 +160,7 @@ func (u *UpstreamDialer) Dial(network, address string) (net.Conn, error) {
 	return conn, nil
 }
 
+//BuildUpstreamRouter populates the slice of dialers
 func BuildUpstreamRouter(proxies []string) socks.Dialer {
 	var allForward []socks.Dialer
 	for _, proxy := range proxies {
