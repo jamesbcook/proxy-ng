@@ -14,7 +14,7 @@ Wanted to make use of multiple socks proxies in a random order. Along with using
 
 ### Pre-Built binary
 
-* Download from [here](https://github.com)
+* Download from [here](https://github.com/jamesbcook/proxy-ng/releases)
 * `./proxy-ng -help`
 
 ## Running
