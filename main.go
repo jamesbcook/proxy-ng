@@ -14,6 +14,7 @@ import (
 
 	"github.com/eahydra/socks"
 	"github.com/elazarl/goproxy"
+	"github.com/jamesbcook/print"
 )
 
 var (
@@ -69,59 +70,73 @@ func main() {
 	myFlags := flagSetup()
 	f, err := os.Open(myFlags.userAgentFile)
 	if err != nil {
-		log.Fatal(err)
+		print.Badln(err)
 	}
 	f2, err := os.Open(myFlags.socks5File)
 	if err != nil {
-		log.Fatal(err)
+		print.Badln(err)
 	}
 	var buf bytes.Buffer
 	buf.ReadFrom(f)
 	ua := &UserAgent{}
 	if err := json.Unmarshal(buf.Bytes(), ua); err != nil {
-		log.Fatal(err)
+		print.Badln(err)
 	}
 	buf.Reset()
 	proxies := &SocksProxy{}
 	buf.ReadFrom(f2)
 	if err := json.Unmarshal(buf.Bytes(), proxies); err != nil {
-		log.Fatal(err)
+		print.Badln(err)
 	}
-	router := BuildUpstreamRouter(proxies.Names)
+	var router socks.Dialer
+	proxy := goproxy.NewProxyHttpServer()
+	if myFlags.verbose {
+		router = logBuildUpStream(BuildUpstreamRouter)(proxies.Names)
+		proxy.ConnectDial = func(network, address string) (net.Conn, error) {
+			return logDialer(router.Dial)(network, address)
+		}
+		proxy.Tr.Dial = func(network, address string) (net.Conn, error) {
+			return logDialer(router.Dial)(network, address)
+		}
+	} else {
+		router = BuildUpstreamRouter(proxies.Names)
+		proxy.ConnectDial = func(network, address string) (net.Conn, error) {
+			return router.Dial(network, address)
+		}
+		proxy.Tr.Dial = func(network, address string) (net.Conn, error) {
+			return router.Dial(network, address)
+		}
+	}
 	socksListen, err := net.Listen("tcp", myFlags.socksListener)
 	if err != nil {
-		log.Fatal(err)
+		print.Badln(err)
+	}
+	if myFlags.verbose {
+		print.Goodf("Started socks listener on %s\n", myFlags.socksListener)
 	}
 	socksvr, err := socks.NewSocks5Server(router)
 	if err != nil {
-		log.Fatal(err)
+		print.Badln(err)
 	}
 	httpListen, err := net.Listen("tcp", myFlags.httpListener)
 	if err != nil {
-		log.Fatal(err)
+		print.Badln(err)
 	}
-	proxy := goproxy.NewProxyHttpServer()
+	if myFlags.verbose {
+		print.Goodf("Started http listener on %s\n", myFlags.httpListener)
+	}
 	proxy.OnRequest().HandleConnect(goproxy.AlwaysMitm)
 	proxy.OnRequest().DoFunc(
 		func(r *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
 			r.Header.Set("User-Agent", ua.randomName())
 			return r, nil
 		})
-	proxy.ConnectDial = func(network, address string) (net.Conn, error) {
-		return router.Dial(network, address)
-	}
-	proxy.Tr.Dial = func(network, address string) (net.Conn, error) {
-		return router.Dial(network, address)
-	}
-	if myFlags.verbose {
-		proxy.Verbose = true
-	}
-
 	go func() {
 		http.Serve(httpListen, proxy)
 	}()
+	print.Goodln("Ready")
 	if err := socksvr.Serve(socksListen); err != nil {
-		log.Fatal(err)
+		print.Badln(err)
 	}
 }
 
@@ -150,6 +165,14 @@ func (u *UpstreamDialer) getRandomDialer() socks.Dialer {
 	return u.forwardDialers[randomDialer]
 }
 
+func logDialer(f func(network, address string) (net.Conn, error)) func(network, address string) (net.Conn, error) {
+	return func(network, address string) (net.Conn, error) {
+		conn, err := f(network, address)
+		print.Statusf("Connecting to %v\n", conn.RemoteAddr())
+		return conn, err
+	}
+}
+
 //Dial is a custom dialer that picks a random dialer before it makes it's connection
 func (u *UpstreamDialer) Dial(network, address string) (net.Conn, error) {
 	router := u.getRandomDialer()
@@ -158,6 +181,16 @@ func (u *UpstreamDialer) Dial(network, address string) (net.Conn, error) {
 		return nil, err
 	}
 	return conn, nil
+}
+
+func logBuildUpStream(f func(proxies []string) socks.Dialer) func(proxies []string) socks.Dialer {
+	return func(proxies []string) socks.Dialer {
+		for x := range proxies {
+			print.Statusf("Loading %s\n", proxies[x])
+		}
+		defer print.Goodln("Loading complete")
+		return f(proxies)
+	}
 }
 
 //BuildUpstreamRouter populates the slice of dialers
